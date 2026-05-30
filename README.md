@@ -1,0 +1,1 @@
+# On-the-Emergence-of-Boolean-Logic-from-Continuous-Truth-Dynamics
