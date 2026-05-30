@@ -1,161 +1,48 @@
-from numba import jit
+import numpy as np
+import matplotlib.pyplot as plt
 
-@jit(nopython=True)
-def rhs_vector(x, g, lam, eps):
+# ============================================================
+# Parameters
+# ============================================================
 
-# En üste ekle
 lam = 1.0
 eps = 1.0
 
-gc = lam * np.tanh(2 * eps) / (2 * eps)
-
-print("Analytical critical coupling gc =", gc)
-
-
-dt = 0.04
-T = 80.0
+dt = 0.005
+T = 300
 steps = int(T / dt)
 
-# System sizes to test
-N_values = [8, 16, 32, 64]
-
-# Coupling values
-g_values = np.linspace(0.0, 1.0, 121)
-
-# Number of random trials for each N and g
-n_trials = 6
-
-# Initial condition:
-# small positive bias selects the positive symmetry-broken branch;
-# small disorder tests robustness against finite-N heterogeneity.
-bias = 1e-2
-disorder = 1e-3
-
-rng = np.random.default_rng(12345)
+g_values = np.linspace(0.0, 1.0, 300)
 
 # ============================================================
-# N-dimensional truth dynamics
+# Dynamics
 # ============================================================
 
-def rhs_vector(x, g, lam, eps):
+def rhs(x, g, lam, eps):
+    return -lam * x + g * np.tanh(2 * eps * x) / np.tanh(2 * eps)
 
-    N = len(x)
-
-    pair_sum = x[:, None] + x[None, :]
-    interaction = np.tanh(eps * pair_sum) / np.tanh(2 * eps)
-
-    # Remove self-coupling: W_ii = 0
-    np.fill_diagonal(interaction, 0.0)
-
-    coupling_term = (g / (N - 1)) * np.sum(interaction, axis=1)
-
-    return -lam * x + coupling_term
-
-
-def rk4_integrate(x0, g, lam, eps, dt, steps):
-    x = x0.copy()
-
+def evolve(x0, g):
+    x = x0
     for _ in range(steps):
-        k1 = rhs_vector(x, g, lam, eps)
-        k2 = rhs_vector(x + 0.5 * dt * k1, g, lam, eps)
-        k3 = rhs_vector(x + 0.5 * dt * k2, g, lam, eps)
-        k4 = rhs_vector(x + dt * k3, g, lam, eps)
-
-        x = x + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-
+        x = x + dt * rhs(x, g, lam, eps)
     return x
 
+x_plus = []
+x_minus = []
+
+for g in g_values:
+    x_plus.append(evolve(+0.01, g))
+    x_minus.append(evolve(-0.01, g))
+
+x_plus = np.array(x_plus)
+x_minus = np.array(x_minus)
+
+gc = lam * np.tanh(2 * eps) / (2 * eps)
+
+print("Critical coupling gc =", gc)
 
 # ============================================================
-# Finite-size scan
-# ============================================================
-
-mean_abs_m = {}
-std_abs_m = {}
-max_abs_x = {}
-
-for N in N_values:
-    print(f"\nRunning N = {N}")
-
-    abs_m_for_N = []
-    std_m_for_N = []
-    max_x_for_N = []
-
-    for g in g_values:
-        trial_abs_m = []
-        trial_max_x = []
-
-        for trial in range(n_trials):
-            x0 = bias + disorder * rng.normal(size=N)
-
-            xT = rk4_integrate(
-                x0=x0,
-                g=g,
-                lam=lam,
-                eps=eps,
-                dt=dt,
-                steps=steps
-            )
-
-            mT = np.mean(xT)
-
-            trial_abs_m.append(abs(mT))
-            trial_max_x.append(np.max(np.abs(xT)))
-
-        abs_m_for_N.append(np.mean(trial_abs_m))
-        std_m_for_N.append(np.std(trial_abs_m))
-        max_x_for_N.append(np.max(trial_max_x))
-
-    mean_abs_m[N] = np.array(abs_m_for_N)
-    std_abs_m[N] = np.array(std_m_for_N)
-    max_abs_x[N] = np.array(max_x_for_N)
-
-    print("Maximum |x_i| reached =", np.max(max_abs_x[N]))
-
-    if np.max(max_abs_x[N]) > 1.0:
-        print("Warning: Some trajectories left the interval [-1,1].")
-    else:
-        print("All trajectories remained inside [-1,1].")
-
-
-# ============================================================
-# Apparent critical point and steepness estimate
-# ============================================================
-
-threshold = 1e-2
-
-print("\nFinite-size estimates:")
-print("N    g_app      |g_app-gc|     max steepness")
-
-apparent_gc = {}
-steepness = {}
-
-for N in N_values:
-    y = mean_abs_m[N]
-
-    # Apparent critical point:
-    # first g where |m*| becomes larger than threshold
-    idx_candidates = np.where(y > threshold)[0]
-
-    if len(idx_candidates) > 0:
-        idx = idx_candidates[0]
-        g_app = g_values[idx]
-    else:
-        g_app = np.nan
-
-    apparent_gc[N] = g_app
-
-    # Steepness of transition:
-    # maximum numerical derivative d|m*|/dg
-    dy_dg = np.gradient(y, g_values)
-    steep = np.max(np.abs(dy_dg))
-    steepness[N] = steep
-
-    print(f"{N:<4d} {g_app: .6f}   {abs(g_app-gc): .6e}   {steep: .6f}")
-
-
-# ============================================================
-# Academic plot style
+# Academic-style plot
 # ============================================================
 
 plt.rcParams.update({
@@ -163,33 +50,33 @@ plt.rcParams.update({
     "font.size": 12,
     "axes.labelsize": 13,
     "axes.titlesize": 13,
-    "legend.fontsize": 10,
+    "legend.fontsize": 11,
     "xtick.labelsize": 11,
     "ytick.labelsize": 11,
     "axes.linewidth": 1.0,
 })
 
-# ============================================================
-# Figure 1: finite-size order parameter curves
-# ============================================================
+fig, ax = plt.subplots(figsize=(6.5, 4.5))
 
-fig, ax = plt.subplots(figsize=(6.7, 4.7))
+# Branches
+ax.plot(
+    g_values,
+    x_plus,
+    color="black",
+    linewidth=2.0,
+    label=r"$x(0)=+10^{-2}$"
+)
 
-line_styles = ["-", "--", "-.", ":", "-"]
-markers = ["o", "s", "^", "D", "v"]
+ax.plot(
+    g_values,
+    x_minus,
+    color="dimgray",
+    linewidth=2.0,
+    linestyle="--",
+    label=r"$x(0)=-10^{-2}$"
+)
 
-for k, N in enumerate(N_values):
-    ax.plot(
-        g_values,
-        mean_abs_m[N],
-        linestyle=line_styles[k % len(line_styles)],
-        marker=markers[k % len(markers)],
-        markevery=12,
-        linewidth=1.8,
-        markersize=4,
-        label=fr"$N={N}$"
-    )
-
+# Critical coupling
 ax.axvline(
     gc,
     color="firebrick",
@@ -198,51 +85,33 @@ ax.axvline(
     label=fr"$g_c={gc:.3f}$"
 )
 
-ax.axhline(0, color="gray", linewidth=0.8)
-
-ax.set_xlabel(r"Coupling strength $g$")
-ax.set_ylabel(r"Order parameter $|m_\ast|$")
-ax.set_xlim(0.0, 1.0)
-ax.set_ylim(-0.02, 1.05)
-
-ax.grid(True, which="major", linestyle=":", linewidth=0.7, alpha=0.6)
-ax.legend(frameon=True, loc="best")
-
-fig.tight_layout()
-
-plt.savefig("finite_size_order_parameter.pdf", bbox_inches="tight")
-plt.savefig("finite_size_order_parameter.png", dpi=300, bbox_inches="tight")
-
-plt.show()
-
-
-# ============================================================
-# Figure 2: steepness versus system size
-# ============================================================
-
-fig, ax = plt.subplots(figsize=(6.2, 4.2))
-
-Ns_array = np.array(N_values)
-steep_array = np.array([steepness[N] for N in N_values])
-
-ax.plot(
-    Ns_array,
-    steep_array,
-    color="black",
-    linewidth=2.0,
-    marker="o",
-    markersize=5
+# Neutral axis
+ax.axhline(
+    0,
+    color="gray",
+    linewidth=0.8,
+    alpha=0.8
 )
 
-ax.set_xlabel(r"System size $N$")
-ax.set_ylabel(r"Maximum transition steepness")
-ax.set_xscale("log", base=2)
+# Labels
+ax.set_xlabel(r"Coupling strength $g$")
+ax.set_ylabel(r"Asymptotic truth phase $x_\ast$")
 
+# Limits
+ax.set_xlim(0.0, 1.0)
+ax.set_ylim(-1.05, 1.05)
+
+# Grid, subtle
 ax.grid(True, which="major", linestyle=":", linewidth=0.7, alpha=0.6)
 
+# Legend
+ax.legend(frameon=True, loc="best")
+
+# Clean layout
 fig.tight_layout()
 
-plt.savefig("finite_size_steepness.pdf", bbox_inches="tight")
-plt.savefig("finite_size_steepness.png", dpi=300, bbox_inches="tight")
+# Save for LaTeX
+plt.savefig("bifurcation_truth_dynamics.pdf", bbox_inches="tight")
+plt.savefig("bifurcation_truth_dynamics.png", dpi=300, bbox_inches="tight")
 
 plt.show()
